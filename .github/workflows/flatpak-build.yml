@@ -1,0 +1,91 @@
+name: Flatpak 打包 ghidra-chinese
+
+# 触发：chinese 分支有 push，或手动跑
+on:
+  push:
+    branches: [chinese]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 构建后发 Release
+        type: boolean
+        default: true
+
+env:
+  APP_ID: io.github.TC999.ghidra_chinese
+
+jobs:
+  flatpak:
+    name: Flatpak 构建 (Linux)
+    runs-on: ubuntu-24.04
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 显示上游 Ghidra 版本
+        run: |
+          curl -s https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest \
+            | grep '"tag_name"' || true
+
+      - name: 取 Gradle 依赖缓存
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle
+          key: gradle-ghidra-chinese-${{ github.sha }}
+          restore-keys: gradle-ghidra-
+
+      # ---- 两阶段策略: 普通宿主环境先拉 gradle 依赖并 vendor, 再 flatpak-builder 离线构建 ----
+      - name: 阶段1 — 拉取 Gradle 依赖(flatRepo/dependencies)
+        run: |
+          git clone --depth 1 -b chinese https://github.com/TC999/ghidra-chinese.git _src
+          cd _src
+          gradle --version || ./gradlew --version
+          # flathub 官方做法是平台侧 gradle + fetchDependencies
+          curl -sL https://services.gradle.org/distributions/gradle-8.5-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp/
+          /tmp/gradle-8.5/bin/gradle -I gradle/support/fetchDependencies.gradle --no-daemon
+          tar -czf ../deps-vendor.tar.gz dependencies flatRepo
+
+      - name: 阶段2 — flatpak-builder 构建
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: ghidra-chinese.flatpak
+          manifest-path: flatpak/${{ env.APP_ID }}.yaml
+          cache-key: flatpak-builder-${{ github.sha }}
+          # 把阶段1产出的依赖 archive 以 source 方式注入 manifest (见 yaml 里的 deps-vendor.tar.gz)
+          verbose: true
+
+      - name: 重命名产物
+        run: mv ghidra-chinese.flatpak ${APP_ID}-${GITHUB_SHA::8}.flatpak
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghidra-chinese-flatpak
+          path: ${{ env.APP_ID }}-*.flatpak
+
+  release:
+    name: 发行
+    needs: flatpak
+    if: ${{ inputs.publish_release }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 获取日期
+        run: echo "CURRENT_DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
+
+      - name: 发布
+        uses: softprops/action-gh-release@v2
+        with:
+          name: flatpak ${{ env.CURRENT_DATE }} - ${{ github.run_id }}
+          tag_name: flatpak-${{ env.CURRENT_DATE }}-${{ github.run_id }}
+          files: artifacts/ghidra-chinese-flatpak/*.flatpak
