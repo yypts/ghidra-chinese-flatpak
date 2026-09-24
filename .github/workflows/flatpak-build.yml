@@ -55,8 +55,9 @@ jobs:
       - name: 打包 vendor 归档
         run: |
           cd src
-          tar -czf ../deps-vendor.tar.gz dependencies flatRepo
+          tar -czf ../deps-vendor.tar.gz dependencies
           ls -la ../deps-vendor.tar.gz
+          du -sh ../deps-vendor.tar.gz
 
       - name: 上传依赖归档
         uses: actions/upload-artifact@v4

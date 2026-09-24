@@ -21,7 +21,7 @@ modules:
     build-commands:
       - /usr/lib/sdk/openjdk21/installjdk.sh
 
-  # from flathub: icoutils for extracting icon, reused as-is
+  # from flathub: icoutils for extracting icon
   - name: icoutils
     cleanup:
       - '*'
@@ -32,18 +32,20 @@ modules:
       - type: patch
         path: icoutils-gcc15.patch
 
-  # ---- 本地化：在两阶段 CI 中先 fetchDependencies 再 vendor 进来 ----
-  # deps-vendor.tar.gz 包含 dependencies/ 和 flatRepo/，由 CI 阶段 1 (workflow) 生成
-  # 解包到 build 目录后，gradle 就能无视这些目录直接 buildGhidra
+  # ---- ghidra ----
+  # 依赖策略: CI 阶段1 已运行真实 fetchDependencies.gradle，它会把
+  #   z3 jar / fidb / yajsw / postgresql / PyDev / cdt / protobuf / psutil / dex2jar 等全部
+  #   放进 dependencies/（含 dependencies/flatRepo）。
+  # flathub 官方 manifest 里的 dex2jar/z3/dbgmodel/ghidra-data 独立 source
+  #   是它"离线钉死 sha256"的等价替代——我们不需要重复。
   - name: ghidra
     buildsystem: simple
     build-commands:
-      - export PATH="/usr/lib/sdk/openjdk21/jvm/openjdk-21/bin:$PATH" && export JAVA_HOME=/usr/lib/sdk/openjdk21/jvm/openjdk-21 &&
-        ./gradlew -I gradle/support/fetchDependencies.gradle --offline --no-daemon --gradle-user-home=. ||
-        true
-      # use build script with vendored deps, no network needed
-      - export PATH="/usr/lib/sdk/openjdk21/jvm/openjdk-21/bin:$PATH" && export JAVA_HOME=/usr/lib/sdk/openjdk21/jvm/openjdk-21
-        && ./gradlew buildGhidra --offline --no-daemon
+      - export JAVA_HOME=/usr/lib/sdk/openjdk21/jvm/openjdk-21
+      - export PATH="$JAVA_HOME/bin:$PATH"
+      # 依赖已 vendor（CI 阶段1真实网络拉取），此处离线 build；maven 依赖走 gradle-home 缓存空的
+      # 情况下会联网拉 mavenCentral——沙盒默认无网络, 若失败见 README 已知风险#4
+      - ./gradlew buildGhidra --no-daemon
       - unzip -o build/dist/ghidra_*_*_linux_*.zip
       - icotool -x Ghidra/RuntimeScripts/Windows/support/ghidra.ico --index=8
       - install -d /app/lib
@@ -58,10 +60,11 @@ modules:
       - type: git
         url: https://github.com/TC999/ghidra-chinese.git
         branch: chinese
-      # 阶段1产物，由 CI workflow 生成后放在仓库根（或者以 local artifact 方式不在 git 里）
+      # 阶段1产物: 完整 dependencies/ 目录（内含 flatRepo/, downloads/, fidb/, 等）
       - type: archive
         path: ../deps-vendor.tar.gz
-        # 解压后覆盖 dependencies/ 和 flatRepo/
+        dest: dependencies
+        # 解到 ghidra 源码树的 dependencies/, 覆盖/补充同名文件
       - type: file
         path: io.github.TC999.ghidra_chinese.desktop
       - type: script
