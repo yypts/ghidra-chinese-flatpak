@@ -43,6 +43,10 @@ modules:
     build-options:
       env:
         JAVA_HOME: /usr/lib/sdk/openjdk21/jvm/openjdk-21
+      # gradle wrapper 需要下载 gradle 发行包 + 构建过程会拉 mavenCentral 依赖,
+      # 必须给沙盒开网络 (Readme 已知风险#4)
+      build-args:
+        - --share=network
     build-commands:
       # JAVA_HOME 通过 build-options.env 注入(跨命令持久, flatpak-builder 每个 build-command
       # 是独立 shell, 在命令里 export 不会传到下一条!)
