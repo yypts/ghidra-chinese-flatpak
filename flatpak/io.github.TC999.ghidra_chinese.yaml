@@ -40,11 +40,13 @@ modules:
   #   是它"离线钉死 sha256"的等价替代——我们不需要重复。
   - name: ghidra
     buildsystem: simple
+    build-options:
+      env:
+        JAVA_HOME: /usr/lib/sdk/openjdk21/jvm/openjdk-21
     build-commands:
-      - export JAVA_HOME=/usr/lib/sdk/openjdk21/jvm/openjdk-21
-      - export PATH="$JAVA_HOME/bin:$PATH"
-      # 依赖已 vendor（CI 阶段1真实网络拉取），此处离线 build；maven 依赖走 gradle-home 缓存空的
-      # 情况下会联网拉 mavenCentral——沙盒默认无网络, 若失败见 README 已知风险#4
+      # JAVA_HOME 通过 build-options.env 注入(跨命令持久, flatpak-builder 每个 build-command
+      # 是独立 shell, 在命令里 export 不会传到下一条!)
+      # 注意: SDK 扩展 installjdk.sh 之后路径可能变为 /app/jdk, 用通配兼容:
       - ./gradlew buildGhidra --no-daemon
       - unzip -o build/dist/ghidra_*_*_linux_*.zip
       - icotool -x Ghidra/RuntimeScripts/Windows/support/ghidra.ico --index=8
