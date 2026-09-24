@@ -38,16 +38,25 @@ jobs:
           key: gradle-home-ghidra-chinese
           restore-keys: gradle-home-
 
+      # 你跑到这个 workflow 的仓库只有 flatpak 脚手架（没有 Ghidra 源码），
+      # 因此这里必须单独 clone 汉化仓库主分支
+      - name: clone ghidra-chinese 源码
+        run: git clone --depth 1 -b chinese https://github.com/TC999/ghidra-chinese.git src
+        # 若 workflow 就放在 TC999/ghidra-chinese 仓库内, 可改为:
+        #   uses: actions/checkout@v4 (即仓库本体, 不 clone)
+
       - name: gradlew fetchDependencies
         run: |
+          cd src
           chmod +x gradlew
           ./gradlew -I gradle/support/fetchDependencies.gradle \
             --no-daemon --gradle-user-home="$GITHUB_WORKSPACE/gradle-home"
 
       - name: 打包 vendor 归档
         run: |
-          tar -czf deps-vendor.tar.gz dependencies flatRepo
-          ls -la deps-vendor.tar.gz
+          cd src
+          tar -czf ../deps-vendor.tar.gz dependencies flatRepo
+          ls -la ../deps-vendor.tar.gz
 
       - name: 上传依赖归档
         uses: actions/upload-artifact@v4
