@@ -1,6 +1,8 @@
 name: Flatpak 打包 ghidra-chinese
 
-# 触发：chinese 分支有 push，或手动跑
+# 触发：chinese 分支 push 或手动
+# 结构：两阶段拆两个 job —— 阶段1在普通 ubuntu 装 JDK21 + Gradle 联网拉依赖；
+#       阶段2进 flatpak 容器只做离线构建（容器没有系统 java/gradle，SDK 扩展只存在于构建沙盒内）
 on:
   push:
     branches: [chinese]
@@ -15,20 +17,19 @@ env:
   APP_ID: io.github.TC999.ghidra_chinese
 
 jobs:
-  flatpak:
-    name: Flatpak 构建 (Linux)
+  # ---------- 阶段 1：拉取 gradle 依赖（普通 ubuntu，Java 生态齐全） ----------
+  fetch-deps:
+    name: 阶段1 — Gradle 依赖
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
-      options: --privileged
     steps:
-      - name: 检出代码
+      - name: 检出
         uses: actions/checkout@v4
 
-      - name: 显示上游 Ghidra 版本
-        run: |
-          curl -s https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest \
-            | grep '"tag_name"' || true
+      - name: 装 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
 
       - name: 取 Gradle 缓存
         uses: actions/cache@v4
@@ -37,30 +38,43 @@ jobs:
           key: gradle-home-ghidra-chinese
           restore-keys: gradle-home-
 
-      # ---- 阶段 1：联网 fetch gradle 依赖并 vendor ----
-      # 容器自带 freedesktop SDK 的 openjdk21 扩展（/usr/lib/sdk/openjdk21），enable.sh 会设好 JAVA_HOME+PATH
-      # gradle 本体下载官方 zip（容器是最小 Fedora 镜像，没有系统 gradle 包）
-      - name: 阶段1 — 拉取 Gradle 依赖(flatRepo/dependencies)
+      - name: gradlew fetchDependencies
         run: |
-          set -e
-          source /usr/lib/sdk/openjdk21/enable.sh
-          java -version
-
-          curl -sfL https://services.gradle.org/distributions/gradle-8.5-bin.zip -o /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /opt/
-          export PATH="/opt/gradle-8.5/bin:$PATH"
-          gradle --version
-
-          git clone --depth 1 -b chinese https://github.com/TC999/ghidra-chinese.git _src
-          cd _src
           chmod +x gradlew
-          ./gradlew -I gradle/support/fetchDependencies.gradle --no-daemon --gradle-user-home="$GITHUB_WORKSPACE/gradle-home"
-          tar -czf ../deps-vendor.tar.gz dependencies flatRepo
-          ls -la ../deps-vendor.tar.gz
+          ./gradlew -I gradle/support/fetchDependencies.gradle \
+            --no-daemon --gradle-user-home="$GITHUB_WORKSPACE/gradle-home"
 
-      # ---- 阶段 2：flatpak-builder 离线构建 ----
-      # manifest 通过 type:archive path: deps-vendor.tar.gz 挂回 build 目录
-      - name: 阶段2 — flatpak-builder 构建
+      - name: 打包 vendor 归档
+        run: |
+          tar -czf deps-vendor.tar.gz dependencies flatRepo
+          ls -la deps-vendor.tar.gz
+
+      - name: 上传依赖归档
+        uses: actions/upload-artifact@v4
+        with:
+          name: deps-vendor
+          path: deps-vendor.tar.gz
+          retention-days: 3
+
+  # ---------- 阶段 2：flatpak 容器内离线构建 ----------
+  flatpak:
+    name: Flatpak 构建 (Linux)
+    needs: fetch-deps
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      - name: 下载依赖归档
+        uses: actions/download-artifact@v4
+        with:
+          name: deps-vendor
+          # 落到 $GITHUB_WORKSPACE（仓库根）；manifest 引用 path: ../deps-vendor.tar.gz（相对 flatpak/ 目录）
+
+      - name: flatpak-builder 构建
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: ghidra-chinese.flatpak
