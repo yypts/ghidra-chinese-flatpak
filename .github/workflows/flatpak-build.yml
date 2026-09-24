@@ -30,32 +30,42 @@ jobs:
           curl -s https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest \
             | grep '"tag_name"' || true
 
-      - name: 取 Gradle 依赖缓存
+      - name: 取 Gradle 缓存
         uses: actions/cache@v4
         with:
-          path: ~/.gradle
-          key: gradle-ghidra-chinese-${{ github.sha }}
-          restore-keys: gradle-ghidra-
+          path: gradle-home
+          key: gradle-home-ghidra-chinese
+          restore-keys: gradle-home-
 
-      # ---- 两阶段策略: 普通宿主环境先拉 gradle 依赖并 vendor, 再 flatpak-builder 离线构建 ----
+      # ---- 阶段 1：联网 fetch gradle 依赖并 vendor ----
+      # 容器自带 freedesktop SDK 的 openjdk21 扩展（/usr/lib/sdk/openjdk21），enable.sh 会设好 JAVA_HOME+PATH
+      # gradle 本体下载官方 zip（容器是最小 Fedora 镜像，没有系统 gradle 包）
       - name: 阶段1 — 拉取 Gradle 依赖(flatRepo/dependencies)
         run: |
+          set -e
+          source /usr/lib/sdk/openjdk21/enable.sh
+          java -version
+
+          curl -sfL https://services.gradle.org/distributions/gradle-8.5-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /opt/
+          export PATH="/opt/gradle-8.5/bin:$PATH"
+          gradle --version
+
           git clone --depth 1 -b chinese https://github.com/TC999/ghidra-chinese.git _src
           cd _src
-          gradle --version || ./gradlew --version
-          # flathub 官方做法是平台侧 gradle + fetchDependencies
-          curl -sL https://services.gradle.org/distributions/gradle-8.5-bin.zip -o /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /tmp/
-          /tmp/gradle-8.5/bin/gradle -I gradle/support/fetchDependencies.gradle --no-daemon
+          chmod +x gradlew
+          ./gradlew -I gradle/support/fetchDependencies.gradle --no-daemon --gradle-user-home="$GITHUB_WORKSPACE/gradle-home"
           tar -czf ../deps-vendor.tar.gz dependencies flatRepo
+          ls -la ../deps-vendor.tar.gz
 
+      # ---- 阶段 2：flatpak-builder 离线构建 ----
+      # manifest 通过 type:archive path: deps-vendor.tar.gz 挂回 build 目录
       - name: 阶段2 — flatpak-builder 构建
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: ghidra-chinese.flatpak
-          manifest-path: flatpak/${{ env.APP_ID }}.yaml
+          manifest-path: flatpak/io.github.TC999.ghidra_chinese.yaml
           cache-key: flatpak-builder-${{ github.sha }}
-          # 把阶段1产出的依赖 archive 以 source 方式注入 manifest (见 yaml 里的 deps-vendor.tar.gz)
           verbose: true
 
       - name: 重命名产物
